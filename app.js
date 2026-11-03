@@ -69,24 +69,35 @@ async function saveUkur(sesi){try{let gid=Number($('#ukurG').value),yy=Number($(
 function renderUkur(){let yy=Number($('#tahun').value),ss=Number($('#semester').value);$('#ukurRows').innerHTML=(window.allowedG||[]).map(g=>{let si=measurements.some(m=>m.gardu_id===g.id&&m.tahun===yy&&m.semester===ss&&m.sesi==='SIANG'),ma=measurements.some(m=>m.gardu_id===g.id&&m.tahun===yy&&m.semester===ss&&m.sesi==='MALAM');return `<tr><td>${esc(g.nomor)}</td><td>${esc(g.penyulang)}</td><td>${si?'✓':'—'}</td><td>${ma?'✓':'—'}</td><td>${si&&ma?'<span class="pill ok">SUDAH UKUR</span>':'<span class="pill">BELUM UKUR</span>'}</td></tr>`}).join('')}
 async function createWO(){try{let ids=[...document.querySelectorAll('.woG:checked')].map(x=>Number(x.value));let payload={judul:$('#woTitle').value.trim(),tahun:Number($('#woYear').value),bulan:Number($('#woMonth').value),petugas:$('#petugas').value};if(!payload.judul||!ids.length||!payload.petugas)throw Error('Isi judul, petugas dan pilih gardu');const {data,error:e}=await db.from('wo').insert(payload).select('id').single();if(e)throw e;const {error:e2}=await db.from('wo_gardu').insert(ids.map(gardu_id=>({wo_id:data.id,gardu_id})));if(e2)throw e2;alert('WO berhasil dibuat');location.reload()}catch(e){error(e)}}
 function renderWO(links){$('#woRows').innerHTML=allWO.filter(w=>role==='admin'||w.petugas===user.id).sort((a,b)=>b.id-a.id).map(w=>`<tr><td>${esc(w.judul)}</td><td>${w.bulan}/${w.tahun}</td><td>${esc(allU.find(p=>p.id===w.petugas)?.username||'Inspeksi')}</td><td>${links.filter(x=>x.wo_id===w.id).length}</td></tr>`).join('')}
-function exportUkur(){
-  if(typeof XLSX==='undefined'){alert('Modul Excel belum termuat.');return}
-  const yy=Number($('#tahun').value),ss=Number($('#semester').value);
-  const keys=[...document.querySelectorAll('.measure-fields[data-sesi="SIANG"] [data-k]')].map(el=>el.dataset.k);
-  const headers=['NOMOR GARDU',...['SIANG','MALAM'].flatMap(sesi=>['TANGGAL '+sesi,...keys.map(k=>sesi+' '+k.toUpperCase()),'CATATAN '+sesi])];
-  const rows=(window.allowedG||[]).map(g=>{
-    const obj={'NOMOR GARDU':g.nomor};
-    for(const sesi of ['SIANG','MALAM']){
-      const m=measurements.find(x=>x.gardu_id===g.id&&x.tahun===yy&&x.semester===ss&&x.sesi===sesi);
-      obj['TANGGAL '+sesi]=m?.tanggal||'';
-      for(const k of keys)obj[sesi+' '+k.toUpperCase()]=m?.data?.[k]??'';
-      obj['CATATAN '+sesi]=m?.catatan||'';
+async function exportUkur(){
+  try {
+    if(typeof XLSX==='undefined') throw Error('Modul Excel belum termuat. Muat ulang halaman.');
+    const yy=Number($('#tahun').value),ss=Number($('#semester').value);
+    // Ambil data terbaru dari database, bukan hanya cache ketika halaman dibuka.
+    const [gardus,hasil]=await Promise.all([fetchAll('gardu'),fetchAll('pengukuran')]);
+    const periode=hasil.filter(m=>Number(m.tahun)===yy&&Number(m.semester)===ss&&['SIANG','MALAM'].includes(m.sesi));
+    // Kolom persis sesuai input pengukuran pada formulir web.
+    const keys=[...document.querySelectorAll('.measure-fields[data-sesi="SIANG"] input[data-k]')].map(el=>el.dataset.k);
+    const header=['NO GARDU',...['SIANG','MALAM'].flatMap(s=>keys.map(k=>`${k.toUpperCase()} ${s}`))];
+    const byId=new Map(gardus.map(g=>[String(g.id),g]));
+    const byGardu=new Map();
+    for(const m of periode){
+      const id=String(m.gardu_id);
+      if(!byGardu.has(id))byGardu.set(id,{});
+      byGardu.get(id)[m.sesi]=m;
     }
-    return obj;
-  });
-  const ws=XLSX.utils.json_to_sheet(rows,{header:headers});ws['!cols']=headers.map((h,i)=>({wch:i===0?20:Math.min(Math.max(h.length+2,12),28)}));
-  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Hasil Ukur');
-  XLSX.writeFile(wb,`AssetbyNu_Ukur_${yy}_S${ss}.xlsx`);
+    const rows=[header];
+    for(const [id,sesi] of byGardu){
+      const g=byId.get(id);if(!g)continue;
+      rows.push([g.nomor,...['SIANG','MALAM'].flatMap(t=>keys.map(k=>sesi[t]?.data?.[k]??''))]);
+    }
+    rows.splice(1,rows.length-1,...rows.slice(1).sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'id',{numeric:true})));
+    if(rows.length===1){alert('Belum ada hasil pengukuran tersimpan untuk periode ini.');return}
+    const ws=XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols']=header.map((h,i)=>({wch:i===0?19:Math.max(13,h.length+2)}));
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Hasil Pengukuran');
+    XLSX.writeFile(wb,`AssetbyNu_Hasil_Pengukuran_${yy}_Semester_${ss}.xlsx`);
+  }catch(e){error(e)}
 }
 async function peta(){measurements=await fetchAll('pengukuran');const map=L.map('map').setView([-2.075,101.43],11);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);let layer=L.layerGroup().addTo(map);function draw(){layer.clearLayers();let yy=Number($('#tahun').value),ss=Number($('#semester').value),bounds=[];for(let g of allG){if(!Number.isFinite(g.latitude)||!Number.isFinite(g.longitude))continue;let color=g.status==='DIBONGKAR'?'#dc5962':g.status==='AKTIF'&&complete(g.id,yy,ss)?'#15996b':'#e4a92c';L.circleMarker([g.latitude,g.longitude],{radius:6,color:'#fff',weight:1.5,fillColor:color,fillOpacity:.95}).bindPopup(`<b>${esc(g.nomor)}</b><br>${esc(g.penyulang)}<br>${esc(g.alamat)}<br>${fmt(g.kapasitas_trafo)} kVA<br>${esc(g.merek)}<br>${esc(g.status)}`).addTo(layer);bounds.push([g.latitude,g.longitude])}$('#mapCount').textContent=`${bounds.length} titik gardu • ${allG.length-bounds.length} tanpa koordinat`;if(bounds.length)map.fitBounds(bounds,{padding:[24,24]})}$('#tahun').value=year();$('#semester').value=sem();$('#tahun').onchange=draw;$('#semester').onchange=draw;draw()}
 window.addEventListener('DOMContentLoaded',init);
