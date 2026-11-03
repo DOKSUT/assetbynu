@@ -4,7 +4,35 @@ async function init(){const {data:{user:u}}=await db.auth.getUser();if(!u){locat
 async function refresh(){allG=await fetchAll('gardu');allG.sort((a,b)=>a.nomor.localeCompare(b.nomor,undefined,{numeric:true}))}async function logout(){await db.auth.signOut();location.href='index.html'}
 function fillSelect(sel,rows,key='id',label='nomor',placeholder='Pilih gardu'){sel.innerHTML='<option value="">'+placeholder+'</option>'+rows.map(r=>`<option value="${esc(r[key])}">${esc(r[label])}</option>`).join('')}
 function complete(gid,yy,ss){return measurements.some(x=>x.gardu_id===gid&&x.tahun===yy&&x.semester===ss&&x.sesi==='SIANG')&&measurements.some(x=>x.gardu_id===gid&&x.tahun===yy&&x.semester===ss&&x.sesi==='MALAM')}
-async function dashboard(){measurements=await fetchAll('pengukuran');allWO=await fetchAll('wo');const yy=Number($('#tahun').value||year()),ss=Number($('#semester').value||sem());const active=allG.filter(g=>g.status==='AKTIF'),down=allG.filter(g=>g.status==='DIBONGKAR'),done=active.filter(g=>complete(g.id,yy,ss));$('#stats').innerHTML=[['Gardu Aktif',active.length],['Gardu Dibongkar',down.length],['Kapasitas Aktif (kVA)',fmt(active.reduce((s,g)=>s+Number(g.kapasitas_trafo||0),0))],['Kapasitas Bongkar (kVA)',fmt(down.reduce((s,g)=>s+Number(g.kapasitas_trafo||0),0))],['Sudah Ukur',done.length],['Belum Ukur',active.length-done.length],['Progres Semester',active.length?Math.round(done.length/active.length*100)+'%':'0%'],['WO Periode Ini',allWO.filter(w=>w.tahun===yy&&(ss===1?w.bulan<=6:w.bulan>6)).length]].map(([a,b])=>`<div class="card stat"><small>${a}</small><b>${b}</b></div>`).join('');const names=[...new Set(allG.map(g=>g.penyulang||'Tanpa Penyulang'))].sort();$('#feeders').innerHTML=names.map(n=>{let gs=allG.filter(g=>(g.penyulang||'Tanpa Penyulang')===n);return `<tr><td>${esc(n)}</td><td>${gs.filter(g=>g.status==='AKTIF').length}</td><td>${fmt(gs.filter(g=>g.status==='AKTIF').reduce((s,g)=>s+Number(g.kapasitas_trafo||0),0))}</td><td>${gs.filter(g=>g.status==='DIBONGKAR').length}</td></tr>`}).join('')}
+async function dashboard(){
+  measurements=await fetchAll('pengukuran');allWO=await fetchAll('wo');
+  const yy=Number($('#tahun').value||year()),ss=Number($('#semester').value||sem());
+  const active=allG.filter(g=>g.status==='AKTIF');
+  const down=allG.filter(g=>g.status==='DIBONGKAR');
+  const other=allG.filter(g=>g.status!=='AKTIF'&&g.status!=='DIBONGKAR');
+  const done=active.filter(g=>complete(g.id,yy,ss));
+  const kva=gs=>gs.reduce((sum,g)=>sum+Number(g.kapasitas_trafo??0),0);
+  const cards=[
+    ['Total Gardu',allG.length],['Gardu Aktif',active.length],['Gardu Dibongkar',down.length],['Perlu Verifikasi',other.length],
+    ['Kapasitas Aktif (kVA)',fmt(kva(active))],['Kapasitas Bongkar (kVA)',fmt(kva(down))],
+    ['Sudah Ukur',done.length],['Belum Ukur',active.length-done.length],
+    ['Progres Semester',active.length?Math.round(done.length/active.length*100)+'%':'0%'],
+    ['WO Periode Ini',allWO.filter(w=>w.tahun===yy&&(ss===1?w.bulan<=6:w.bulan>6)).length]
+  ];
+  $('#stats').innerHTML=cards.map(([label,value])=>`<div class="card stat"><small>${label}</small><b>${value}</b></div>`).join('');
+  const names=[...new Set(allG.map(g=>g.penyulang||'Tanpa Penyulang'))].sort();
+  let total={count:0,active:0,kva:0,down:0,other:0};
+  const rows=names.map(n=>{
+    const gs=allG.filter(g=>(g.penyulang||'Tanpa Penyulang')===n);
+    const ga=gs.filter(g=>g.status==='AKTIF');
+    const gd=gs.filter(g=>g.status==='DIBONGKAR');
+    const gv=gs.filter(g=>g.status!=='AKTIF'&&g.status!=='DIBONGKAR');
+    total.count+=gs.length;total.active+=ga.length;total.kva+=kva(ga);total.down+=gd.length;total.other+=gv.length;
+    return `<tr><td>${esc(n)}</td><td>${gs.length}</td><td>${ga.length}</td><td>${fmt(kva(ga))}</td><td>${gd.length}</td><td>${gv.length}</td></tr>`;
+  });
+  rows.push(`<tr class="total-row"><td><b>TOTAL</b></td><td><b>${total.count}</b></td><td><b>${total.active}</b></td><td><b>${fmt(total.kva)}</b></td><td><b>${total.down}</b></td><td><b>${total.other}</b></td></tr>`);
+  $('#feeders').innerHTML=rows.join('');
+}
 const masterFields=['nomor','penyulang','alamat','latitude','longitude','kapasitas_aset','kapasitas_trafo','merek','tahun','nomor_seri','konstruksi','kondisi_konstruksi','kondisi_trafo','kondisi_arrester','posisi_arrester','jenis_turunan','ukuran','fco','kondisi_phb','kantor_pelayanan','gh_recloser','panjang_jtr','keterangan','status'];let editId=null;
 function master(){renderMaster();fillSelect($('#rotA'),allG);fillSelect($('#rotB'),allG);$('#search').addEventListener('input',renderMaster);$('#filter').addEventListener('change',renderMaster)}
 function renderMaster(){let q=$('#search').value.toLowerCase(),f=$('#filter').value;let rows=allG.filter(g=>(!f||g.status===f)&&[g.nomor,g.penyulang,g.alamat,g.nomor_seri].join(' ').toLowerCase().includes(q));$('#count').textContent=`${rows.length} dari ${allG.length} gardu`;$('#masterRows').innerHTML=rows.map(g=>`<tr><td><button class="btn alt" onclick="editG(${g.id})">Edit</button></td><td><b>${esc(g.nomor)}</b></td><td>${esc(g.penyulang)}</td><td>${esc(g.alamat)}</td><td>${fmt(g.kapasitas_aset)}</td><td>${fmt(g.kapasitas_trafo)}</td><td>${esc(g.merek)}</td><td>${esc(g.tahun)}</td><td>${esc(g.nomor_seri)}</td><td>${status(g)}</td></tr>`).join('')}
