@@ -13,13 +13,18 @@ async function dashboard(){
   const done=active.filter(g=>complete(g.id,yy,ss));
   const kva=gs=>gs.reduce((sum,g)=>sum+Number(g.kapasitas_trafo??0),0);
   const cards=[
-    ['Total Gardu',allG.length],['Gardu Aktif',active.length],['Gardu Dibongkar',down.length],['Perlu Verifikasi',other.length],
-    ['Kapasitas Aktif (kVA)',fmt(kva(active))],['Kapasitas Bongkar (kVA)',fmt(kva(down))],
-    ['Sudah Ukur',done.length],['Belum Ukur',active.length-done.length],
-    ['Progres Semester',active.length?Math.round(done.length/active.length*100)+'%':'0%'],
-    ['WO Periode Ini',allWO.filter(w=>w.tahun===yy&&(ss===1?w.bulan<=6:w.bulan>6)).length]
+    {label:'Total Gardu',value:allG.length,kind:'blue',icon:'▦'},
+    {label:'Gardu Aktif',value:active.length,kind:'green',icon:'✓',filter:'AKTIF'},
+    {label:'Gardu Dibongkar',value:down.length,kind:'red',icon:'▣',filter:'DIBONGKAR'},
+    {label:'Perlu Verifikasi',value:other.length,kind:'amber',icon:'!',filter:'VERIFIKASI'},
+    {label:'Kapasitas Aktif (kVA)',value:fmt(kva(active)),kind:'cyan',icon:'ϟ'},
+    {label:'Kapasitas Bongkar (kVA)',value:fmt(kva(down)),kind:'rose',icon:'▤'},
+    {label:'Sudah Ukur',value:done.length,kind:'green',icon:'✓'},
+    {label:'Belum Ukur',value:active.length-done.length,kind:'amber',icon:'◷'},
+    {label:'Progres Semester',value:active.length?Math.round(done.length/active.length*100)+'%':'0%',kind:'purple',icon:'◉'},
+    {label:'WO Periode Ini',value:allWO.filter(w=>w.tahun===yy&&(ss===1?w.bulan<=6:w.bulan>6)).length,kind:'blue',icon:'☷'}
   ];
-  $('#stats').innerHTML=cards.map(([label,value])=>`<div class="card stat"><small>${label}</small><b>${value}</b></div>`).join('');
+  $('#stats').innerHTML=cards.map(c=>`<${c.filter?'button type="button"':'div'} class="card stat stat-${c.kind}${c.filter?' stat-download':''}" ${c.filter?`onclick="exportGarduStatus('${c.filter}')" title="Download daftar ${c.label} ke Excel"`:''}><span class="stat-icon" aria-hidden="true">${c.icon}</span><small>${c.label}</small><b>${c.value}</b>${c.filter?'<span class="stat-hint">↓ Download Excel</span>':''}</${c.filter?'button':'div'}>`).join('');
   const names=[...new Set(allG.map(g=>g.penyulang||'Tanpa Penyulang'))].sort();
   let total={count:0,active:0,kva:0,down:0,other:0};
   const rows=names.map(n=>{
@@ -32,6 +37,22 @@ async function dashboard(){
   });
   rows.push(`<tr class="total-row"><td><b>TOTAL</b></td><td><b>${total.count}</b></td><td><b>${total.active}</b></td><td><b>${fmt(total.kva)}</b></td><td><b>${total.down}</b></td><td><b>${total.other}</b></td></tr>`);
   $('#feeders').innerHTML=rows.join('');
+}
+function exportGarduStatus(filter){
+  if(typeof XLSX==='undefined'){alert('Modul Excel belum termuat. Periksa koneksi internet.');return}
+  const rows=allG.filter(g=>filter==='VERIFIKASI'?(g.status!=='AKTIF'&&g.status!=='DIBONGKAR'):g.status===filter);
+  const output=rows.map((g,i)=>({
+    'NO':i+1,'NOMOR GARDU':g.nomor||'','KANTOR PELAYANAN':g.kantor_pelayanan||'',
+    'PENYULANG':g.penyulang||'','GH RECLOSER':g.gh_recloser||'',
+    'ALAMAT':g.alamat||'','KAPASITAS ASET (kVA)':g.kapasitas_aset??'',
+    'KAPASITAS TRAFO (kVA)':g.kapasitas_trafo??'',
+    'STATUS SAAT INI':g.status||'',
+    ...(filter==='VERIFIKASI'?{'HASIL VERIFIKASI (AKTIF/DIBONGKAR)':'','TANGGAL VERIFIKASI':'','KETERANGAN VERIFIKASI':''}:{})
+  }));
+  const headers=['NO','NOMOR GARDU','KANTOR PELAYANAN','PENYULANG','GH RECLOSER','ALAMAT','KAPASITAS ASET (kVA)','KAPASITAS TRAFO (kVA)','STATUS SAAT INI',...(filter==='VERIFIKASI'?['HASIL VERIFIKASI (AKTIF/DIBONGKAR)','TANGGAL VERIFIKASI','KETERANGAN VERIFIKASI']:[])];
+  const ws=XLSX.utils.json_to_sheet(output,{header:headers});ws['!cols']=headers.map(h=>({wch:Math.min(Math.max(h.length+2,14),45)}));
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Daftar Gardu');
+  XLSX.writeFile(wb,`AssetbyNu_Gardu_${filter}_${today()}.xlsx`);
 }
 const masterFields=['nomor','penyulang','alamat','latitude','longitude','kapasitas_aset','kapasitas_trafo','merek','tahun','nomor_seri','konstruksi','kondisi_konstruksi','kondisi_trafo','kondisi_arrester','posisi_arrester','jenis_turunan','ukuran','fco','kondisi_phb','kantor_pelayanan','gh_recloser','panjang_jtr','keterangan','status'];let editId=null;
 function master(){renderMaster();fillSelect($('#rotA'),allG);fillSelect($('#rotB'),allG);$('#search').addEventListener('input',renderMaster);$('#filter').addEventListener('change',renderMaster)}
@@ -48,6 +69,24 @@ async function saveUkur(sesi){try{let gid=Number($('#ukurG').value),yy=Number($(
 function renderUkur(){let yy=Number($('#tahun').value),ss=Number($('#semester').value);$('#ukurRows').innerHTML=(window.allowedG||[]).map(g=>{let si=measurements.some(m=>m.gardu_id===g.id&&m.tahun===yy&&m.semester===ss&&m.sesi==='SIANG'),ma=measurements.some(m=>m.gardu_id===g.id&&m.tahun===yy&&m.semester===ss&&m.sesi==='MALAM');return `<tr><td>${esc(g.nomor)}</td><td>${esc(g.penyulang)}</td><td>${si?'✓':'—'}</td><td>${ma?'✓':'—'}</td><td>${si&&ma?'<span class="pill ok">SUDAH UKUR</span>':'<span class="pill">BELUM UKUR</span>'}</td></tr>`}).join('')}
 async function createWO(){try{let ids=[...document.querySelectorAll('.woG:checked')].map(x=>Number(x.value));let payload={judul:$('#woTitle').value.trim(),tahun:Number($('#woYear').value),bulan:Number($('#woMonth').value),petugas:$('#petugas').value};if(!payload.judul||!ids.length||!payload.petugas)throw Error('Isi judul, petugas dan pilih gardu');const {data,error:e}=await db.from('wo').insert(payload).select('id').single();if(e)throw e;const {error:e2}=await db.from('wo_gardu').insert(ids.map(gardu_id=>({wo_id:data.id,gardu_id})));if(e2)throw e2;alert('WO berhasil dibuat');location.reload()}catch(e){error(e)}}
 function renderWO(links){$('#woRows').innerHTML=allWO.filter(w=>role==='admin'||w.petugas===user.id).sort((a,b)=>b.id-a.id).map(w=>`<tr><td>${esc(w.judul)}</td><td>${w.bulan}/${w.tahun}</td><td>${esc(allU.find(p=>p.id===w.petugas)?.username||'Inspeksi')}</td><td>${links.filter(x=>x.wo_id===w.id).length}</td></tr>`).join('')}
-function exportUkur(){let yy=Number($('#tahun').value),ss=Number($('#semester').value),rows=(window.allowedG||[]).map(g=>{let obj={...g,status_ukur:complete(g.id,yy,ss)?'SUDAH UKUR':'BELUM UKUR'};for(let sesi of ['SIANG','MALAM']){let m=measurements.find(x=>x.gardu_id===g.id&&x.tahun===yy&&x.semester===ss&&x.sesi===sesi);obj['tanggal_'+sesi]=m?.tanggal||'';obj['catatan_'+sesi]=m?.catatan||'';for(let [k,v] of Object.entries(m?.data||{}))obj[sesi+'_'+k]=v}return obj});let ws=XLSX.utils.json_to_sheet(rows),wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Hasil Ukur');XLSX.writeFile(wb,`AssetbyNu_Ukur_${yy}_S${ss}.xlsx`)}
+function exportUkur(){
+  if(typeof XLSX==='undefined'){alert('Modul Excel belum termuat.');return}
+  const yy=Number($('#tahun').value),ss=Number($('#semester').value);
+  const keys=[...document.querySelectorAll('.measure-fields[data-sesi="SIANG"] [data-k]')].map(el=>el.dataset.k);
+  const headers=['NOMOR GARDU',...['SIANG','MALAM'].flatMap(sesi=>['TANGGAL '+sesi,...keys.map(k=>sesi+' '+k.toUpperCase()),'CATATAN '+sesi])];
+  const rows=(window.allowedG||[]).map(g=>{
+    const obj={'NOMOR GARDU':g.nomor};
+    for(const sesi of ['SIANG','MALAM']){
+      const m=measurements.find(x=>x.gardu_id===g.id&&x.tahun===yy&&x.semester===ss&&x.sesi===sesi);
+      obj['TANGGAL '+sesi]=m?.tanggal||'';
+      for(const k of keys)obj[sesi+' '+k.toUpperCase()]=m?.data?.[k]??'';
+      obj['CATATAN '+sesi]=m?.catatan||'';
+    }
+    return obj;
+  });
+  const ws=XLSX.utils.json_to_sheet(rows,{header:headers});ws['!cols']=headers.map((h,i)=>({wch:i===0?20:Math.min(Math.max(h.length+2,12),28)}));
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Hasil Ukur');
+  XLSX.writeFile(wb,`AssetbyNu_Ukur_${yy}_S${ss}.xlsx`);
+}
 async function peta(){measurements=await fetchAll('pengukuran');const map=L.map('map').setView([-2.075,101.43],11);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);let layer=L.layerGroup().addTo(map);function draw(){layer.clearLayers();let yy=Number($('#tahun').value),ss=Number($('#semester').value),bounds=[];for(let g of allG){if(!Number.isFinite(g.latitude)||!Number.isFinite(g.longitude))continue;let color=g.status==='DIBONGKAR'?'#dc5962':g.status==='AKTIF'&&complete(g.id,yy,ss)?'#15996b':'#e4a92c';L.circleMarker([g.latitude,g.longitude],{radius:6,color:'#fff',weight:1.5,fillColor:color,fillOpacity:.95}).bindPopup(`<b>${esc(g.nomor)}</b><br>${esc(g.penyulang)}<br>${esc(g.alamat)}<br>${fmt(g.kapasitas_trafo)} kVA<br>${esc(g.merek)}<br>${esc(g.status)}`).addTo(layer);bounds.push([g.latitude,g.longitude])}$('#mapCount').textContent=`${bounds.length} titik gardu • ${allG.length-bounds.length} tanpa koordinat`;if(bounds.length)map.fitBounds(bounds,{padding:[24,24]})}$('#tahun').value=year();$('#semester').value=sem();$('#tahun').onchange=draw;$('#semester').onchange=draw;draw()}
 window.addEventListener('DOMContentLoaded',init);
